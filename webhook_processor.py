@@ -2,6 +2,7 @@ import json
 import requests
 from flask import Flask, request, jsonify
 from datetime import datetime
+import os
 
 app = Flask(__name__)
 
@@ -21,9 +22,9 @@ def masterpagbr_webhook():
     item = trx.get("items", [{}])[0]
 
     product = {
-        "id": str(trx.get("id")),              # obrigatório
-        "planId": str(trx.get("id")),          # obrigatório
-        "planName": item.get("title", "Plano"), # obrigatório
+        "id": str(trx.get("id")),
+        "planId": str(trx.get("id")),
+        "planName": item.get("title", "Plano"),
         "name": item.get("title", "Plano"),
         "priceInCents": item.get("unitPrice", 0) * 100,
         "quantity": item.get("quantity", 1)
@@ -77,7 +78,6 @@ def masterpagbr_webhook():
     print(payload)
     print("==============================\n")
 
-    # ENVIA PARA A UTMIFY
     headers = {
         "Content-Type": "application/json",
         "x-api-token": API_TOKEN
@@ -91,6 +91,3 @@ def masterpagbr_webhook():
         print(">>> ERRO AO ENVIAR PARA A UTMIFY:", str(e))
 
     return jsonify({"status": "ok"})
-
-if __name__ == "__main__":
-    app.run(port=5000)
