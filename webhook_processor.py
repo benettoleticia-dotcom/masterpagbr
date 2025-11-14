@@ -78,6 +78,7 @@ def masterpagbr_webhook():
     print(payload)
     print("==============================\n")
 
+    # ENVIA PARA A UTMIFY
     headers = {
         "Content-Type": "application/json",
         "x-api-token": API_TOKEN
@@ -91,3 +92,7 @@ def masterpagbr_webhook():
         print(">>> ERRO AO ENVIAR PARA A UTMIFY:", str(e))
 
     return jsonify({"status": "ok"})
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
