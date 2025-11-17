@@ -1,1 +1,1 @@
-web: gunicorn webhook_processor:app
+web: python webhook_processor.py
