@@ -9,72 +9,49 @@ app = Flask(__name__)
 UTMIFY_URL = "https://api.utmify.com.br/api-credentials/orders"
 API_TOKEN = "izzLJJoH2orGwZFm7BgeruinzULoJ0hMv5fV"
 
-
-# === SISTEMA DE IDEMPOTÊNCIA (evita duplicação) ===
-PROCESSED_FILE = "processed_ids.json"
-
-if not os.path.exists(PROCESSED_FILE):
-    with open(PROCESSED_FILE, "w") as f:
-        json.dump([], f)
-
-def load_processed_ids():
-    with open(PROCESSED_FILE, "r") as f:
-        return json.load(f)
-
-def save_processed_id(trx_id):
-    ids = load_processed_ids()
-    ids.append(trx_id)
-    with open(PROCESSED_FILE, "w") as f:
-        json.dump(ids, f)
-
+# Controle interno para impedir vendas duplicadas
+processed_orders = set()
 
 @app.route("/masterpagbr-webhook", methods=["POST"])
 def masterpagbr_webhook():
-
     data = request.json
-    print("\n=== WEBHOOK RECEBIDO ===")
+
+    print("\n=== JSON RECEBIDO DA MASTER (CURTO) ===")
     print(json.dumps(data, indent=4))
 
-    trx = data.get("data", {})
-    status = trx.get("status")
-    trx_id = str(trx.get("id"))
+    # O ID da venda (vem do externalRef ou metadata)
+    order_id = str(data.get("externalRef")) or str(data.get("metadata")) or "sem_id"
 
-    # 🚨 1 — PROCESSAR SOMENTE STATUS = paid
-    if status != "paid":
-        print(f">>> Ignorado: status '{status}' não é 'paid'")
-        return jsonify({"ignored": True})
+    # 🔥 Impede duplicações
+    if order_id in processed_orders:
+        print(">>> Pedido duplicado detectado. Ignorando:", order_id)
+        return jsonify({"status": "duplicate_ignored"})
 
-    # 🚨 2 — BLOQUEAR IDs JÁ PROCESSADOS
-    processed = load_processed_ids()
-    if trx_id in processed:
-        print(f">>> Pagamento {trx_id} já enviado para UTMify. Ignorando.")
-        return jsonify({"duplicated": True})
+    processed_orders.add(order_id)
 
-    print(f">>> Pagamento {trx_id} será processado.")
-
-    # === ITEM ===
-    item = trx.get("items", [{}])[0]
+    # ===== PROCESSAR PRODUTO =====
+    item = data.get("items", [{}])[0]
 
     product = {
-        "id": trx_id,
-        "planId": trx_id,
-        "planName": item.get("title"),
-        "name": item.get("title"),
+        "id": order_id,
+        "planId": order_id,
+        "planName": item.get("title", "Plano"),
+        "name": item.get("title", "Plano"),
         "priceInCents": item.get("unitPrice", 0) * 100,
         "quantity": item.get("quantity", 1)
     }
 
-    # === CLIENTE ===
-    customer = trx.get("customer", {})
+    # ===== CLIENTE =====
+    customer = data.get("customer", {})
 
     payload = {
-        "orderId": trx_id,
+        "orderId": order_id,
         "platform": "MasterPagBR",
-        "paymentMethod": trx.get("paymentMethod"),
-        "status": status,
+        "paymentMethod": data.get("paymentMethod"),
+        "status": "paid",  # JSON curto, então já consideramos como pago
         "createdAt": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        "approvedDate": trx.get("paidAt"),
-        "refundedAt": trx.get("refundedAt"),
+        "approvedDate": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "refundedAt": None,
 
         "customer": {
             "name": customer.get("name"),
@@ -82,7 +59,7 @@ def masterpagbr_webhook():
             "phone": customer.get("phone"),
             "document": customer.get("document", {}).get("number"),
             "country": "BR",
-            "ip": trx.get("ip") or "0.0.0.0"
+            "ip": "0.0.0.0"
         },
 
         "products": [product],
@@ -98,7 +75,7 @@ def masterpagbr_webhook():
         },
 
         "commission": {
-            "totalPriceInCents": trx.get("amount", 0) * 100,
+            "totalPriceInCents": data.get("amount", 0) * 100,
             "gatewayFeeInCents": 0,
             "userCommissionInCents": 0
         },
@@ -107,7 +84,7 @@ def masterpagbr_webhook():
     }
 
     print("\n=== ENVIANDO PARA UTMIFY ===")
-    print(payload)
+    print(json.dumps(payload, indent=4))
 
     headers = {
         "Content-Type": "application/json",
@@ -117,16 +94,10 @@ def masterpagbr_webhook():
     try:
         response = requests.post(UTMIFY_URL, json=payload, headers=headers)
         print(">>> RESPOSTA UTMIFY:", response.status_code, response.text)
-
-        # ⚠ SE TUDO OK → salvar ID para evitar duplicação
-        if response.status_code == 200:
-            save_processed_id(trx_id)
-
     except Exception as e:
         print(">>> ERRO AO ENVIAR PARA UTMIFY:", str(e))
 
-    return jsonify({"status": "processed"})
-
+    return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
