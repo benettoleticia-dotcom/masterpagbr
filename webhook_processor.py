@@ -16,41 +16,58 @@ processed_orders = set()
 def masterpagbr_webhook():
     data = request.json
 
-    print("\n=== JSON RECEBIDO DA MASTER (CURTO) ===")
+    print("\n=== JSON RECEBIDO DA MASTER ===")
     print(json.dumps(data, indent=4))
 
-    # O ID da venda (vem do externalRef ou metadata)
-    order_id = str(data.get("externalRef")) or str(data.get("metadata")) or "sem_id"
+    # ID da compra
+    order_id = (
+        str(data.get("externalRef"))
+        or str(data.get("metadata"))
+        or "sem_id"
+    )
 
-    # 🔥 Impede duplicações
+    # Evita duplicação
     if order_id in processed_orders:
-        print(">>> Pedido duplicado detectado. Ignorando:", order_id)
         return jsonify({"status": "duplicate_ignored"})
-
     processed_orders.add(order_id)
 
-    # ===== PROCESSAR PRODUTO =====
+    # CAPTURA O STATUS REAL
+    status_master = data.get("status") or "pending"  # se não tiver, assume pendente
+
+    # Converte para status UTMify
+    status_map = {
+        "paid": "paid",
+        "approved": "paid",
+        "pending": "pending",
+        "waiting_payment": "pending",
+        "expired": "refused",
+        "refused": "refused"
+    }
+
+    status_final = status_map.get(status_master, "pending")
+
+    # Produto
     item = data.get("items", [{}])[0]
 
     product = {
         "id": order_id,
         "planId": order_id,
-        "planName": item.get("title", "Plano"),
-        "name": item.get("title", "Plano"),
+        "planName": item.get("title", "Produto"),
+        "name": item.get("title", "Produto"),
         "priceInCents": item.get("unitPrice", 0) * 100,
         "quantity": item.get("quantity", 1)
     }
 
-    # ===== CLIENTE =====
+    # Cliente
     customer = data.get("customer", {})
 
     payload = {
         "orderId": order_id,
         "platform": "MasterPagBR",
         "paymentMethod": data.get("paymentMethod"),
-        "status": "paid",  # JSON curto, então já consideramos como pago
+        "status": status_final,
         "createdAt": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        "approvedDate": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "approvedDate": None if status_final != "paid" else datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         "refundedAt": None,
 
         "customer": {
@@ -65,13 +82,13 @@ def masterpagbr_webhook():
         "products": [product],
 
         "trackingParameters": {
-            "src": None,
-            "sck": None,
-            "utm_source": None,
-            "utm_campaign": None,
-            "utm_medium": None,
-            "utm_content": None,
-            "utm_term": None
+            "src": data.get("src"),
+            "sck": data.get("sck"),
+            "utm_source": data.get("utm_source"),
+            "utm_campaign": data.get("utm_campaign"),
+            "utm_medium": data.get("utm_medium"),
+            "utm_content": data.get("utm_content"),
+            "utm_term": data.get("utm_term")
         },
 
         "commission": {
@@ -98,7 +115,3 @@ def masterpagbr_webhook():
         print(">>> ERRO AO ENVIAR PARA UTMIFY:", str(e))
 
     return jsonify({"status": "ok"})
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
