@@ -9,7 +9,6 @@ app = Flask(__name__)
 UTMIFY_URL = "https://api.utmify.com.br/api-credentials/orders"
 API_TOKEN = "izzLJJoH2orGwZFm7BgeruinzULoJ0hMv5fV"
 
-# Controle interno para impedir vendas duplicadas
 processed_orders = set()
 
 @app.route("/masterpagbr-webhook", methods=["POST"])
@@ -26,27 +25,30 @@ def masterpagbr_webhook():
         or "sem_id"
     )
 
-    # Evita duplicação
+    # Evitar duplicação
     if order_id in processed_orders:
+        print(">>> Pedido já processado, ignorando:", order_id)
         return jsonify({"status": "duplicate_ignored"})
+
     processed_orders.add(order_id)
 
-    # CAPTURA O STATUS REAL
-    status_master = data.get("status") or "pending"  # se não tiver, assume pendente
+    # STATUS REAL vindo da MasterPag
+    mp_status = data.get("status", "").lower()
 
-    # Converte para status UTMify
+    # MAPEAMENTO PARA UTMIFY
     status_map = {
+        "waiting_payment": "pending",
+        "pending": "pending",
         "paid": "paid",
         "approved": "paid",
-        "pending": "pending",
-        "waiting_payment": "pending",
         "expired": "refused",
+        "canceled": "refused",
         "refused": "refused"
     }
 
-    status_final = status_map.get(status_master, "pending")
+    utm_status = status_map.get(mp_status, "pending")
 
-    # Produto
+    # DADOS DO PRODUTO
     item = data.get("items", [{}])[0]
 
     product = {
@@ -58,16 +60,17 @@ def masterpagbr_webhook():
         "quantity": item.get("quantity", 1)
     }
 
-    # Cliente
+    # CLIENTE
     customer = data.get("customer", {})
 
     payload = {
         "orderId": order_id,
         "platform": "MasterPagBR",
         "paymentMethod": data.get("paymentMethod"),
-        "status": status_final,
-        "createdAt": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        "approvedDate": None if status_final != "paid" else datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "status": utm_status,
+
+        "createdAt": data.get("createdAt", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")),
+        "approvedDate": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") if utm_status == "paid" else None,
         "refundedAt": None,
 
         "customer": {
@@ -76,7 +79,7 @@ def masterpagbr_webhook():
             "phone": customer.get("phone"),
             "document": customer.get("document", {}).get("number"),
             "country": "BR",
-            "ip": "0.0.0.0"
+            "ip": data.get("ip") or "0.0.0.0"
         },
 
         "products": [product],
