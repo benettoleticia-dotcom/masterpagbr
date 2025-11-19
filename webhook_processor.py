@@ -10,8 +10,32 @@ app = Flask(__name__)
 API_TOKEN = "izzLJJoH2orGwZFm7BgeruinzULoJ0hMv5fV"
 UTMIFY_URL = "https://api.utmify.com.br/api-credentials/orders"
 
-# Evita duplicações
+# Controle interno para impedir duplicações
 processed_orders = set()
+
+def gerar_order_id(mp):
+    """
+    Gera um orderId confiável garantindo que nunca será None.
+    PRIORIDADE:
+    1) externalRef (se existir)
+    2) metadata (se for numérico)
+    3) id da transação MasterPag
+    """
+    external = mp.get("externalRef")
+    metadata = mp.get("metadata")
+    trans_id = mp.get("id")
+
+    # 1 — externalRef válido
+    if external and str(external).strip() != "" and external != "null":
+        return str(external)
+
+    # 2 — metadata numérico (evita nomes como "Plano Semanal")
+    if metadata and str(metadata).isdigit():
+        return str(metadata)
+
+    # 3 — último fallback: ID da transação MasterPag (sempre existe)
+    return str(trans_id)
+
 
 @app.route("/masterpagbr-webhook", methods=["POST"])
 def masterpagbr_webhook():
@@ -23,27 +47,28 @@ def masterpagbr_webhook():
     # O MasterPag envia tudo dentro de "data"
     mp = data.get("data", {})
 
-    # ID do pedido (melhor campo possível)
-    order_id = str(mp.get("externalRef")) \
-               or str(mp.get("metadata")) \
-               or str(mp.get("id"))
+    # Gera orderId seguro
+    order_id = gerar_order_id(mp)
 
-    # ⛔ Se já processou, ignora
+    # Verifica duplicação
     if order_id in processed_orders:
         print(f">>> Pedido já processado, ignorando: {order_id}")
         return jsonify({"status": "duplicate_ignored"})
     processed_orders.add(order_id)
 
-    # STATUS DO MASTER PAG → UTMIFY
+    # Mapeamento de status MasterPag → UTMify
     mp_status = mp.get("status")
-    utm_status = "waiting_payment"
 
     if mp_status == "paid":
         utm_status = "paid"
+    elif mp_status == "waiting_payment":
+        utm_status = "waiting_payment"
     elif mp_status == "refused":
         utm_status = "refused"
     elif mp_status == "refunded":
         utm_status = "refunded"
+    else:
+        utm_status = "waiting_payment"
 
     # CLIENTE
     customer = mp.get("customer", {})
@@ -82,9 +107,12 @@ def masterpagbr_webhook():
         ],
 
         "trackingParameters": {
-            "src": None, "sck": None,
-            "utm_source": None, "utm_campaign": None,
-            "utm_medium": None, "utm_content": None,
+            "src": None,
+            "sck": None,
+            "utm_source": None,
+            "utm_campaign": None,
+            "utm_medium": None,
+            "utm_content": None,
             "utm_term": None
         },
 
